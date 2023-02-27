@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "poetry-check-existing-plugin"
+version = "0.1.-"
+description = "Poetry plugin to check if a package with the same version already exists in a pypi index."
+authors = ["Rustem Galiullin <rustemgal@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "poetry_check_existing_plugin"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+poetry = "^1.2"
+
+[tool.poetry.plugins."poetry.application.plugin"]
+check_existing = "poetry_check_existing_plugin.plugin:CheckExistingPlugin"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
