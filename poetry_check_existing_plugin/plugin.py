@@ -11,6 +11,8 @@ from poetry.poetry import Poetry
 from poetry.publishing.uploader import Uploader
 from poetry.utils.authenticator import Authenticator
 
+from poetry_check_existing_plugin.artifactory import ArtifactoryClient
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,7 +31,9 @@ def _get_releases(session: requests.Session, url: str) -> list[str]:
 class PoetryProjectExt:
     def __init__(self, poetry_project: Poetry) -> None:
         self._poetry = poetry_project
-        self._uploader = Uploader(self._poetry, self._poetry.config.get("http-basic", {}))
+        self._uploader = Uploader(
+            self._poetry, self._poetry.config.get("http-basic", {})
+        )
         self._authenticator = Authenticator(self._poetry.config)
 
     @classmethod
@@ -61,12 +65,13 @@ class PoetryProjectExt:
         return repository_name, url
 
     def check_existing(
-            self,
-            repository: str | None,
-            username: str | None,
-            password: str | None,
-            cert: str | None = None,
-            client_cert: str | None = None,
+        self,
+        repository: str | None,
+        username: str | None,
+        password: str | None,
+        cert: str | None = None,
+        client_cert: str | None = None,
+        artifactory: bool = False,
     ) -> None:
         repository_name, url = self.get_url(repository_name=repository)
 
@@ -93,32 +98,63 @@ class PoetryProjectExt:
         self._uploader.auth(username, password)
 
         session = self._uploader.make_session()
-        session.verify = str(resolved_cert) if isinstance(resolved_cert, Path) else resolved_cert
+        session.verify = (
+            str(resolved_cert) if isinstance(resolved_cert, Path) else resolved_cert
+        )
 
         if resolved_client_cert:
             session.cert = str(resolved_client_cert)
 
         try:
-            releases = _get_releases(session, url)
+            if artifactory:
+                art = ArtifactoryClient(url, username=username, password=password)
+                releases = art.get_releases(repository_name, self.name)
+            else:
+                releases = _get_releases(session, url)
 
             if self.version in releases:
-                raise RuntimeError(f"{self.name}=={self.version} already exists in the {repository_name!r} index")
+                raise RuntimeError(
+                    f"Package version {self.version} already exists in {repository_name}"
+                )
+        except Exception as e:
+            logger.error("Error while checking existing package version", exc_info=e)
+            raise
+
         finally:
             session.close()
+
+        return releases
 
 
 class CheckExistingCommand(Command):
     name = "check-existing"
     description = "Checks if the package version already exists in the pypi index"
     arguments = [
-        argument("directory", "The pyproject.toml which contains package version", optional=True, default=str(Path.cwd())),
+        argument(
+            "directory",
+            "The pyproject.toml which contains package version",
+            optional=True,
+            default=str(Path.cwd()),
+        ),
     ]
     options = [
         option("repository", "r", "The repository to use", flag=False, default=None),
+        option(
+            "artifactory",
+            "A",
+            "Whether to use pyartifactory to interact with pypi deployed in Artifactory",
+            flag=True,
+        ),
         option("username", "u", "The username to use", flag=False, default=None),
         option("password", "p", "The password to use", flag=False, default=None),
         option("cert", "c", "The path to a CA bundle to use", flag=False, default=None),
-        option("client-cert", "C", "The path to a client certificate to use", flag=False, default=None),
+        option(
+            "client-cert",
+            "C",
+            "The path to a client certificate to use",
+            flag=False,
+            default=None,
+        ),
     ]
 
     def handle(self) -> int:
@@ -126,13 +162,22 @@ class CheckExistingCommand(Command):
 
         poetry_dir = self.argument("directory")
         poetry_project = PoetryProjectExt.from_dir(poetry_dir)
-        poetry_project.check_existing(repository=self.option("repository"),
-                                      username=self.option("username"),
-                                      password=self.option("password"),
-                                      cert=self.option("cert"),
-                                      client_cert=self.option("client-cert"),
-                                      )
-        self.line(f"<info>{poetry_project.name}=={poetry_project.version} does not exist in the index</info>")
+        self.line(
+            f"<info>Package name: {poetry_project.name}, version: {poetry_project.version}</info>"
+        )
+
+        poetry_project.check_existing(
+            repository=self.option("repository"),
+            username=self.option("username"),
+            password=self.option("password"),
+            cert=self.option("cert"),
+            client_cert=self.option("client-cert"),
+            artifactory=self.option("artifactory"),
+        )
+
+        self.line(
+            f"<info>{poetry_project.name}=={poetry_project.version} does not exist in the index</info>"
+        )
 
         return 0
 
